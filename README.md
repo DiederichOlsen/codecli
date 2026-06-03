@@ -237,11 +237,3 @@ pyagent/
 
 ## 后续路线
 
-优先级建议：
-
-1. 彩色 diff 和更友好的权限确认 UI。
-2. 更细的 Bash / PowerShell 命令解析。
-3. LLM 驱动的上下文压缩。
-4. `/plan` 模式和更完整的 Todo 视图。
-5. MCP、插件/技能系统、子 agent。
-
