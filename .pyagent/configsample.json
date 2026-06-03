@@ -1,0 +1,9 @@
+{
+  "api_key": "replace-with-your-api-key",
+  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "model": "qwen-plus",
+  "permission_mode": "default",
+  "command_timeout": 30,
+  "max_agent_turns": 8,
+  "max_tool_output_chars": 20000
+}
