@@ -9,6 +9,8 @@ from typing import Any, Protocol
 class ToolResult:
     content: str
     success: bool = True
+    # 给本地 CLI 看的短摘要，不回避完整 content；LLM 仍然收到完整工具结果。
+    display_summary: str = ""
 
 
 class Tool(Protocol):

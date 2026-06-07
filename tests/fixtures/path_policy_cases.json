@@ -1,0 +1,47 @@
+[
+  {
+    "name": "read workspace file",
+    "tool": "Read",
+    "args": {"file_path": "src/app.py"},
+    "mode": "default",
+    "behavior": "allow",
+    "classification": "readonly",
+    "policy": "FilePathPolicy"
+  },
+  {
+    "name": "block parent read in non-interactive mode",
+    "tool": "Read",
+    "args": {"file_path": "../outside.txt"},
+    "mode": "default",
+    "behavior": "deny",
+    "classification": "requires_user_confirmation",
+    "policy": "InteractiveApprovalPolicy"
+  },
+  {
+    "name": "block sensitive pyagent path in non-interactive mode",
+    "tool": "Read",
+    "args": {"file_path": ".pyagent/config.json"},
+    "mode": "default",
+    "behavior": "deny",
+    "classification": "requires_user_confirmation",
+    "policy": "InteractiveApprovalPolicy"
+  },
+  {
+    "name": "accept edits allows workspace write",
+    "tool": "Write",
+    "args": {"file_path": "src/app.py"},
+    "mode": "accept_edits",
+    "behavior": "allow",
+    "classification": "file_write",
+    "policy": "ModePolicy"
+  },
+  {
+    "name": "plan blocks bash",
+    "tool": "Bash",
+    "args": {"command": "git status"},
+    "mode": "plan",
+    "behavior": "deny",
+    "classification": "blocked_by_mode",
+    "policy": "ModePolicy"
+  }
+]

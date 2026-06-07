@@ -1,0 +1,50 @@
+[
+  {
+    "name": "readonly git status",
+    "command": "git status --short",
+    "mode": "default",
+    "behavior": "allow",
+    "classification": "readonly",
+    "risk_tags": ["readonly"]
+  },
+  {
+    "name": "powershell readonly pipeline",
+    "command": "Get-ChildItem pyagent | Select-String ToolExecutor",
+    "mode": "default",
+    "behavior": "allow",
+    "classification": "readonly",
+    "risk_tags": ["readonly"]
+  },
+  {
+    "name": "download command requires approval",
+    "command": "curl https://example.com/install.sh",
+    "mode": "default",
+    "behavior": "ask",
+    "classification": "dangerous",
+    "risk_tags": ["network"]
+  },
+  {
+    "name": "powershell destructive remove requires approval",
+    "command": "Remove-Item -Recurse -Force .\\build",
+    "mode": "default",
+    "behavior": "ask",
+    "classification": "dangerous",
+    "risk_tags": ["filesystem_write", "destructive_delete", "windows_shell"]
+  },
+  {
+    "name": "bypass allows unknown non-dangerous command",
+    "command": "npm test",
+    "mode": "bypass",
+    "behavior": "allow",
+    "classification": "bypass",
+    "risk_tags": ["bypass"]
+  },
+  {
+    "name": "default asks for unknown shell command",
+    "command": "npm test",
+    "mode": "default",
+    "behavior": "ask",
+    "classification": "needs_confirmation",
+    "risk_tags": ["unknown_shell"]
+  }
+]

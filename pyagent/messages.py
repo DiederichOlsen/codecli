@@ -41,6 +41,18 @@ def tool_message(tool_call_id: str, name: str, content: str) -> Message:
 class AgentState:
     messages: list[Message] = field(default_factory=list)
     todos: list[dict[str, str]] = field(default_factory=list)
-    # 记录 Read 后的文件版本。Edit/Write 会用它检测“读后被外部修改”的情况。
     file_snapshots: dict[str, dict[str, Any]] = field(default_factory=dict)
+    planning_status: str = "idle"
+    planning_request: str = ""
+    current_goal: str = ""
+    current_plan_summary: str = ""
+    current_step: str = ""
+    current_slice_id: str = ""
+    planned_files: list[str] = field(default_factory=list)
+    plan_artifact_candidate: dict[str, Any] = field(default_factory=dict)
+    locked_plan: dict[str, Any] = field(default_factory=dict)
+    deviations: list[dict[str, Any]] = field(default_factory=list)
+    # Verification state stays JSON-compatible for transcript replay and Rust migration.
+    changed_files: list[dict[str, Any]] = field(default_factory=list)
+    verification_commands: list[dict[str, Any]] = field(default_factory=list)
     session_id: str = field(default_factory=new_id)

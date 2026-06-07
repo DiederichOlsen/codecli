@@ -55,6 +55,7 @@ python -m pyagent
   "base_url": "https://api.deepseek.com/v1",
   "model": "deepseek-chat",
   "permission_mode": "default",
+  "color": "auto",
   "command_timeout": 30,
   "max_agent_turns": 8
 }
@@ -90,6 +91,8 @@ Apply this edit? [y/N]
 如果设置为 `accept_edits` 或 `bypass`，安全路径内的编辑会跳过 diff 二次确认并直接写入。非交互模式下，默认模式会拒绝编辑，避免没有用户确认时静默改文件。
 
 `Write` 工具也使用同样的 diff 确认流程。它会把现有文件内容和即将写入的新内容做对比，确认后才覆盖或创建文件。
+
+工具调用、工具成功/失败、权限提示、警告和 diff 预览会按类型着色。颜色输出可通过 `--color auto|always|never`、`PYAGENT_COLOR` 或 `NO_COLOR` 控制。Bash 失败时，CLI 会直接显示一段本地 stderr/stdout 摘要；完整工具结果仍会回填给模型。
 
 ## 文件快照校验
 

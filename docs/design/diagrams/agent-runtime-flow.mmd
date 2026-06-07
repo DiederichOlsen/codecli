@@ -1,0 +1,13 @@
+flowchart TD
+  User["User input"] --> Agent["Agent.ask"]
+  Agent --> Model["OpenAI-compatible model"]
+  Model --> Assistant["Assistant message"]
+  Assistant --> Decision{"Tool calls?"}
+  Decision -- "no" --> Final["Final answer"]
+  Decision -- "yes" --> Scheduler["ToolScheduler"]
+  Scheduler --> Executor["ToolExecutor"]
+  Executor --> Permission["PermissionManager"]
+  Executor --> Tool["Local tool"]
+  Executor --> Audit["RuntimeTraceStore JSONL"]
+  Tool --> Result["tool_result message"]
+  Result --> Agent

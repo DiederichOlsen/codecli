@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import difflib
-import hashlib
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
+from .. import ui
 from .base import ToolContext, ToolResult, truncate_output
+from .edit_policy import EditPolicy
+from ..verification import VerificationPolicy
+
+
+_EDIT_POLICY = EditPolicy()
+_VERIFICATION_POLICY = VerificationPolicy()
 
 
 class ReadTool:
@@ -27,13 +33,18 @@ class ReadTool:
         path = _resolve(ctx.cwd, args["file_path"])
         if not path.exists():
             return ToolResult(f"Error: file does not exist: {path}", success=False)
-        text = path.read_text(encoding="utf-8", errors="replace")
-        _record_snapshot(ctx, path)
+
+        text = _EDIT_POLICY.read_text(path)
         lines = text.splitlines()
         offset = int(args.get("offset") or 1)
         limit = args.get("limit")
         start = max(offset - 1, 0)
-        selected = lines[start : start + int(limit)] if limit else lines[start:]
+        end = start + int(limit) if limit else None
+        selected = lines[start:end]
+
+        partial = start > 0 or (end is not None and end < len(lines))
+        _EDIT_POLICY.record_read(ctx, path, partial=partial)
+
         numbered = "\n".join(f"{idx + start + 1:>6} | {line}" for idx, line in enumerate(selected))
         return ToolResult(truncate_output(numbered, ctx.max_output_chars))
 
@@ -54,13 +65,15 @@ class WriteTool:
 
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = _resolve(ctx.cwd, args["file_path"])
-        stale = _check_stale_snapshot(ctx, path)
-        if stale:
-            return ToolResult(stale, success=False)
-        before = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
-        after = str(args["content"])
+        precondition = _EDIT_POLICY.validate_write_precondition(ctx, path)
+        if precondition:
+            return ToolResult(precondition, success=False)
+
+        before = _EDIT_POLICY.read_text(path) if path.exists() else ""
+        after = _EDIT_POLICY.adapt_replacement_to_file(path, str(args["content"]))
         if before == after:
             return ToolResult("Write skipped: file content is already identical.")
+
         diff = _build_diff(path, before, after)
         if _requires_diff_confirmation(ctx):
             if not ctx.interactive:
@@ -70,9 +83,10 @@ class WriteTool:
                 )
             if not _confirm_change("Write preview", path, diff, ctx):
                 return ToolResult("Write rejected by user. File was not changed.", success=False)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(after, encoding="utf-8")
-        _record_snapshot(ctx, path)
+
+        _EDIT_POLICY.write_text(path, after)
+        _EDIT_POLICY.record_read(ctx, path, partial=False)
+        _VERIFICATION_POLICY.record_file_change(ctx.state, path=path, operation="write")
         return ToolResult(truncate_output(f"Wrote {path}\n\n{diff}", ctx.max_output_chars))
 
 
@@ -94,20 +108,23 @@ class EditTool:
 
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = _resolve(ctx.cwd, args["file_path"])
-        old = str(args["old_string"])
-        new = str(args["new_string"])
+        old = _EDIT_POLICY.adapt_replacement_to_file(path, str(args["old_string"]))
+        new = _EDIT_POLICY.adapt_replacement_to_file(path, str(args["new_string"]))
         replace_all = bool(args.get("replace_all", False))
+
         if old == new:
             return ToolResult("Error: old_string and new_string are identical.", success=False)
+
         if not path.exists():
             if old != "":
                 return ToolResult(f"Error: file does not exist: {path}", success=False)
             before = ""
         else:
-            stale = _check_stale_snapshot(ctx, path)
-            if stale:
-                return ToolResult(stale, success=False)
-            before = path.read_text(encoding="utf-8", errors="replace")
+            precondition = _EDIT_POLICY.validate_write_precondition(ctx, path)
+            if precondition:
+                return ToolResult(precondition, success=False)
+            before = _EDIT_POLICY.read_text(path)
+
         count = before.count(old)
         if old and count == 0:
             return ToolResult("Error: old_string was not found in the file.", success=False)
@@ -116,6 +133,7 @@ class EditTool:
                 f"Error: old_string appears {count} times. Set replace_all=true or provide more context.",
                 success=False,
             )
+
         after = before.replace(old, new) if replace_all else before.replace(old, new, 1)
         diff = _build_diff(path, before, after)
         if not diff:
@@ -130,9 +148,9 @@ class EditTool:
             if not _confirm_change("Edit preview", path, diff, ctx):
                 return ToolResult("Edit rejected by user. File was not changed.", success=False)
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(after, encoding="utf-8")
-        _record_snapshot(ctx, path)
+        _EDIT_POLICY.write_text(path, after)
+        _EDIT_POLICY.record_read(ctx, path, partial=False)
+        _VERIFICATION_POLICY.record_file_change(ctx.state, path=path, operation="edit")
         return ToolResult(truncate_output(f"Edited {path}\n\n{diff}", ctx.max_output_chars))
 
 
@@ -146,15 +164,11 @@ def _requires_diff_confirmation(ctx: ToolContext) -> bool:
 
 
 def _confirm_change(title: str, path: Path, diff: str, ctx: ToolContext) -> bool:
-    """展示真实 diff 并等待用户确认。
-
-    这是刻意放在工具内部完成的：权限层只能看到模型给出的 JSON 参数，
-    而用户真正需要确认的是“将要写入磁盘的具体变化”。
-    """
+    # The permission layer sees JSON arguments; the user needs the concrete disk diff.
     print(f"\n{title}")
     print(f"File: {path}")
     print("-" * 72)
-    print(truncate_output(diff, min(ctx.max_output_chars, 12000)))
+    print(ui.diff(truncate_output(diff, min(ctx.max_output_chars, 12000))))
     print("-" * 72)
     answer = input("Apply this change? [y/N] ").strip().lower()
     return answer in {"y", "yes"}
@@ -170,41 +184,3 @@ def _build_diff(path: Path, before: str, after: str) -> str:
             lineterm="",
         )
     )
-
-
-def _record_snapshot(ctx: ToolContext, path: Path) -> None:
-    snapshot = _snapshot(path)
-    if snapshot is not None:
-        ctx.state.file_snapshots[str(path.resolve())] = snapshot
-
-
-def _check_stale_snapshot(ctx: ToolContext, path: Path) -> Optional[str]:
-    """检测文件是否在 Read 之后被外部修改。
-
-    Claude Code 的文件工具会尽量避免“基于旧上下文写文件”。这里用一个
-    简化版：如果当前会话读过该文件，就在写入前比较 mtime/size/sha256。
-    """
-    key = str(path.resolve())
-    previous = ctx.state.file_snapshots.get(key)
-    if previous is None or not path.exists():
-        return None
-    current = _snapshot(path)
-    if current is None or current == previous:
-        return None
-    return (
-        "Error: file changed since it was last read in this session. "
-        "Read the file again before editing or writing it."
-    )
-
-
-def _snapshot(path: Path) -> Optional[dict[str, Any]]:
-    try:
-        data = path.read_bytes()
-        stat = path.stat()
-    except OSError:
-        return None
-    return {
-        "mtime_ns": stat.st_mtime_ns,
-        "size": stat.st_size,
-        "sha256": hashlib.sha256(data).hexdigest(),
-    }

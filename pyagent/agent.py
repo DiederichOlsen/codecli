@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-import json
 from typing import Any, Optional
 
 from .config import Config
 from .context import build_system_prompt
-from .messages import AgentState, assistant_message, system_message, tool_message, user_message
+from .messages import AgentState, assistant_message, system_message, user_message
 from .model import OpenAICompatibleModel
 from .permissions import PermissionManager
-from .storage import TranscriptStore
+from .storage import RuntimeTraceStore, TranscriptStore
 from .tools.base import ToolContext, ToolResult
+from .tools.executor import ToolExecutor
 from .tools.registry import ToolRegistry
+from .tools.scheduler import ToolScheduler
+from . import ui
 
 
 class Agent:
@@ -37,6 +39,7 @@ class Agent:
             base_url=config.base_url,
             model=config.model,
         )
+        self.trace_store = RuntimeTraceStore(config.config_dir)
         if not self.state.messages:
             self._append(system_message(build_system_prompt(config.cwd, self.registry.names())))
 
@@ -52,54 +55,28 @@ class Agent:
                 final_text += response.content
             if not response.tool_calls:
                 return final_text
-            for call in response.tool_calls:
-                result_msg = self._execute_tool_call(call)
-                self._append(result_msg)
+            print("\n" + ui.runtime_header(f"tool calls: {len(response.tool_calls)}"))
+            for execution in self._tool_scheduler().run(response.tool_calls):
+                print()
+                for line in execution.user_display:
+                    print(line)
+                self._append(execution.message)
         warning = "Stopped: reached max agent turns."
-        print(warning)
+        print(ui.warning(warning))
         return final_text + "\n" + warning
 
     def compact_now(self) -> bool:
         return self._compact_if_needed(force=True)
 
+    def load_session(self, session_id: str) -> AgentState:
+        self.store.save_state(self.state)
+        self.state = self.store.load(session_id)
+        if not self.state.messages:
+            self._append(system_message(build_system_prompt(self.config.cwd, self.registry.names())))
+        return self.state
+
     def run_local_tool(self, name: str, args: dict[str, Any]) -> ToolResult:
-        tool = self.registry.get(name)
-        if tool is None:
-            return ToolResult(f"Unknown tool: {name}", success=False)
-        decision = self.permissions.decide(tool.name, args)
-        if not decision.allowed:
-            return ToolResult(f"Permission denied: {decision.reason}", success=False)
-        return tool.run(args, self._tool_context())
-
-    def _execute_tool_call(self, call: dict[str, Any]) -> dict[str, Any]:
-        call_id = str(call.get("id") or "")
-        func = call.get("function") or {}
-        name = str(func.get("name") or "")
-        raw_args = func.get("arguments") or "{}"
-        print(f"\n[tool] {name}({raw_args})")
-        try:
-            args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
-        except json.JSONDecodeError as exc:
-            return tool_message(call_id, name, f"InputValidationError: invalid JSON arguments: {exc}")
-
-        tool = self.registry.get(name)
-        if tool is None:
-            return tool_message(call_id, name, f"Error: no such tool: {name}")
-
-        decision = self.permissions.decide(tool.name, args)
-        if not decision.allowed:
-            content = f"Permission denied: {decision.reason}"
-            print(f"[tool denied] {content}")
-            return tool_message(call_id, name, content)
-
-        try:
-            result = tool.run(args, self._tool_context())
-        except Exception as exc:
-            result = ToolResult(f"Error calling tool {name}: {exc}", success=False)
-
-        status = "ok" if result.success else "error"
-        print(f"[tool {status}] {name}")
-        return tool_message(call_id, name, result.content)
+        return self._tool_executor().run_local_tool(name, args)
 
     def _complete_with_streaming(self):
         response = None
@@ -126,6 +103,17 @@ class Agent:
             permission_mode=self.config.permission_mode,
         )
 
+    def _tool_executor(self) -> ToolExecutor:
+        return ToolExecutor(
+            registry=self.registry,
+            permissions=self.permissions,
+            context=self._tool_context(),
+            trace_store=self.trace_store,
+        )
+
+    def _tool_scheduler(self) -> ToolScheduler:
+        return ToolScheduler(registry=self.registry, executor=self._tool_executor())
+
     def _compact_if_needed(self, *, force: bool = False) -> bool:
         # 简化版上下文压缩：不额外调用模型，先用可预测的本地摘要把旧消息折叠掉。
         # 这样原型即使在网络不稳定时也不会因为 compact 本身失败而卡住。
@@ -144,12 +132,15 @@ class Agent:
         )
         self.state.messages = [system, compact_msg, *recent]
         self.store.append(self.state.session_id, compact_msg)
+        self.store.save_messages(self.state)
         self._append(system_message("Context compacted: older messages were summarized locally."))
         return True
 
     def _append(self, message: dict[str, Any]) -> None:
         self.state.messages.append(message)
         self.store.append(self.state.session_id, message)
+        if self.store.has_message_snapshot(self.state.session_id):
+            self.store.save_messages(self.state)
 
 
 def _rough_message_chars(messages: list[dict[str, Any]]) -> int:

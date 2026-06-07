@@ -53,6 +53,7 @@ Qwen/DashScope 兼容模式示例：
   "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
   "model": "qwen-plus",
   "permission_mode": "default",
+  "color": "auto",
   "command_timeout": 30,
   "max_agent_turns": 8,
   "max_tool_output_chars": 20000
@@ -67,13 +68,14 @@ DeepSeek 示例：
   "base_url": "https://api.deepseek.com/v1",
   "model": "deepseek-chat",
   "permission_mode": "default",
+  "color": "auto",
   "command_timeout": 30,
   "max_agent_turns": 8,
   "max_tool_output_chars": 20000
 }
 ```
 
-启动交互模式：
+开发本工具时，可以在源码仓库内启动交互模式：
 
 ```powershell
 python -m pyagent
@@ -90,6 +92,45 @@ D:\Tool\Anaconda\envs\codecli\python.exe -m pyagent
 ```powershell
 python -m pyagent "请总结当前项目结构"
 ```
+
+## 跨目录使用
+
+现阶段不需要安装 PyAgent。推荐保持源码目录不动，在目标项目目录里通过绝对路径启动：
+
+```powershell
+cd D:\your\actual-project
+D:\Tool\Anaconda\envs\codecli\python.exe D:\Program\codexproject\codecli\pyagent
+```
+
+单次执行：
+
+```powershell
+cd D:\your\actual-project
+D:\Tool\Anaconda\envs\codecli\python.exe D:\Program\codexproject\codecli\pyagent "阅读当前项目结构并给出改进建议"
+```
+
+这时默认工作区就是当前目录 `.`，文件工具只能在当前项目内读写。也可以不切目录，直接显式指定工作区：
+
+```powershell
+D:\Tool\Anaconda\envs\codecli\python.exe D:\Program\codexproject\codecli\pyagent --cwd D:\your\actual-project
+```
+
+配置读取顺序为：命令行参数 > 环境变量 > 项目级 `.pyagent/config.json` > 用户级 `%USERPROFILE%\.pyagent\config.json` > PyAgent 源码目录 `.pyagent/config.json` > 默认值。
+
+颜色输出可以用 `--color auto|always|never` 控制，默认 `auto`。如果想在调试时强制查看颜色效果，可以使用：
+
+```powershell
+D:\Tool\Anaconda\envs\codecli\python.exe D:\Program\codexproject\codecli\pyagent --color always
+```
+
+因此更适合把 API key 放在用户级配置中：
+
+```powershell
+New-Item -ItemType Directory -Force $env:USERPROFILE\.pyagent
+Copy-Item D:\Program\codexproject\codecli\.pyagent\configsample.json $env:USERPROFILE\.pyagent\config.json
+```
+
+然后编辑 `%USERPROFILE%\.pyagent\config.json` 填入真实 key。项目级 `.pyagent/config.json` 可以只放模型、权限模式等项目覆盖项，也可以完全不放。
 
 ## 常用命令
 
@@ -120,6 +161,8 @@ Apply this change? [y/N]
 ```
 
 只有输入 `y` 或 `yes` 才会写入。
+
+工具调用、工具成功/失败、权限提示、警告和 diff 预览会按类型着色。Bash 失败时，控制台会额外显示一段本地 stderr/stdout 摘要；完整工具结果仍然会回填给模型用于后续修复。
 
 ## 权限模式
 
@@ -236,4 +279,3 @@ pyagent/
 - 工具 schema 目前使用 JSON Schema dict，后续可换成 Pydantic。
 
 ## 后续路线
-
