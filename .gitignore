@@ -7,3 +7,9 @@ ccb/
 .pyagent/tool-results/
 .pyagent/tmp/
 .pyagent/config.json
+
+# JetBrains IDE (PyCharm, IntelliJ, etc.)
+.idea/
+
+# coding angent relative
+.codanna
