@@ -1,0 +1,16 @@
+[project]
+name = "pyagent"
+version = "0.1.0"
+description = "A small Claude Code inspired CLI coding-agent prototype"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+dependencies = []
+
+[project.scripts]
+pyagent = "pyagent.cli:main"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"

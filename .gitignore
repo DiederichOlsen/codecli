@@ -1,5 +1,6 @@
 __pycache__/
 *.py[cod]
+*.egg-info/
 claude/
 ccb/
 .pyagent/sessions/
@@ -13,3 +14,6 @@ ccb/
 
 # coding angent relative
 .codanna
+
+# uv virtual environment
+.venv/
