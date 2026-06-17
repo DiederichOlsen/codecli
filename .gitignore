@@ -8,6 +8,7 @@ ccb/
 .pyagent/tool-results/
 .pyagent/tmp/
 .pyagent/config.json
+.pyagent/audit/
 
 # JetBrains IDE (PyCharm, IntelliJ, etc.)
 .idea/

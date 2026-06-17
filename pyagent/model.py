@@ -150,7 +150,12 @@ def _to_api_message(message: Message) -> dict[str, Any]:
             "name": message.get("name"),
             "content": message.get("content", ""),
         }
-    result = {"role": role, "content": message.get("content", "")}
+    content = message.get("content", "")
+    # Per OpenAI spec: assistant messages with tool_calls should have
+    # content=null (not "") when there is no text response.
+    if role == "assistant" and message.get("tool_calls") and not content:
+        content = None
+    result = {"role": role, "content": content}
     if role == "assistant" and message.get("tool_calls"):
         result["tool_calls"] = message["tool_calls"]
     return result

@@ -131,8 +131,15 @@ class Agent:
         if len(self.state.messages) <= 10:
             return False
         system = self.state.messages[0]
-        old = self.state.messages[1:-8]
-        recent = self.state.messages[-8:]
+        # Preserve tool/tool_calls pairing: walk backward until we find a
+        # non-tool message (i.e. an assistant with tool_calls or the start).
+        # This prevents tool messages from being orphaned without a preceding
+        # assistant(tool_calls) after compaction.
+        split = max(1, len(self.state.messages) - 8)
+        while split < len(self.state.messages) and self.state.messages[split].get("role") == "tool":
+            split -= 1
+        old = self.state.messages[1:split]
+        recent = self.state.messages[split:]
         summary = _summarize_messages(old)
         preserved_ids = [str(message.get("id", "")) for message in recent if message.get("id")]
         boundary = _build_context_boundary(
