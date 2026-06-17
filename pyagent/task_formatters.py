@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .task_contracts import GateResult, IntentModel, MaintenanceModel, PlanArtifact, PlanContract, PlanOption
+from .task_contracts import GateResult, IntentModel, MaintenanceDigest, MaintenanceModel, PlanArtifact, PlanContract, PlanOption
 
 
 def format_plan_options(options: tuple[PlanOption, ...]) -> str:
@@ -71,6 +71,53 @@ def format_maintenance_model(model: MaintenanceModel) -> str:
     else:
         lines.append("    - none")
     lines.extend(["  handoff_map:", *_format_items(model.handoff_map)])
+    return "\n".join(lines)
+
+
+def format_maintenance_digest(digest: MaintenanceDigest) -> str:
+    lines = [
+        "MaintenanceDigest",
+        f"  digest_id: {digest.digest_id}",
+        f"  revision: {digest.revision}",
+        f"  updated_at: {digest.updated_at}",
+        f"  mental_model: {digest.mental_model}",
+        "  module_map:",
+    ]
+    if digest.module_map:
+        for item in digest.module_map:
+            lines.append(f"    - {item.module}: {item.responsibility}")
+    else:
+        lines.append("    - none")
+    lines.append("  change_paths:")
+    if digest.change_paths:
+        for item in digest.change_paths:
+            line = f"    - {item.scenario}: start at {item.start_at}"
+            if item.notes:
+                line += f" ({item.notes})"
+            lines.append(line)
+    else:
+        lines.append("    - none")
+    lines.extend(
+        [
+            "  extension_points:",
+            *_format_items(digest.extension_points),
+            "  invariants:",
+            *_format_items(digest.invariants),
+            "  test_intent_map:",
+        ]
+    )
+    if digest.test_intent_map:
+        for item in digest.test_intent_map:
+            lines.append(f"    - {item.intent}")
+            lines.append("      checks:")
+            lines.extend(_format_items(item.checks, indent="        "))
+    else:
+        lines.append("    - none")
+    lines.extend(["  handoff_notes:", *_format_items(digest.handoff_notes)])
+    if digest.source_plan_id:
+        lines.append(f"  source_plan_id: {digest.source_plan_id}")
+    if digest.source_message_id:
+        lines.append(f"  source_message_id: {digest.source_message_id}")
     return "\n".join(lines)
 
 
@@ -177,8 +224,10 @@ def format_plan_contract(contract: PlanContract) -> str:
             *_format_items(contract.new_files),
             "  design_intents:",
             *_format_items(contract.design_intents),
-            "  maintenance_model:",
-            "    - present" if contract.maintenance_model else "    - missing",
+            "  maintenance_model_optional:",
+            "    - present" if contract.maintenance_model else "    - omitted",
+            "  maintenance_digest:",
+            "    - present" if contract.maintenance_digest else "    - missing",
             "  implementation_slices:",
         ]
     )

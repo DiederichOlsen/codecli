@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
+from . import ui
 from .config import Config
 from .context import build_system_prompt
-from .messages import AgentState, assistant_message, system_message, user_message
+from .messages import (
+    AgentState,
+    assistant_message,
+    context_boundary_message,
+    new_id,
+    system_message,
+    user_message,
+)
 from .model import OpenAICompatibleModel
 from .permissions import PermissionManager
 from .storage import RuntimeTraceStore, TranscriptStore
@@ -12,7 +21,6 @@ from .tools.base import ToolContext, ToolResult
 from .tools.executor import ToolExecutor
 from .tools.registry import ToolRegistry
 from .tools.scheduler import ToolScheduler
-from . import ui
 
 
 class Agent:
@@ -33,6 +41,7 @@ class Agent:
             config_dir=config.config_dir,
             mode=config.permission_mode,
             interactive=interactive,
+            read_only_tools=self.registry.read_only_names(),
         )
         self.model = OpenAICompatibleModel(
             api_key=config.api_key,
@@ -115,8 +124,8 @@ class Agent:
         return ToolScheduler(registry=self.registry, executor=self._tool_executor())
 
     def _compact_if_needed(self, *, force: bool = False) -> bool:
-        # 简化版上下文压缩：不额外调用模型，先用可预测的本地摘要把旧消息折叠掉。
-        # 这样原型即使在网络不稳定时也不会因为 compact 本身失败而卡住。
+        # Local compaction is deterministic: no extra model call, and the
+        # authoritative plan/digest state is re-injected after the summary.
         if not force and _rough_message_chars(self.state.messages) < 60000:
             return False
         if len(self.state.messages) <= 10:
@@ -125,19 +134,36 @@ class Agent:
         old = self.state.messages[1:-8]
         recent = self.state.messages[-8:]
         summary = _summarize_messages(old)
+        preserved_ids = [str(message.get("id", "")) for message in recent if message.get("id")]
+        boundary = _build_context_boundary(
+            self.state,
+            pre_compact_message_count=len(self.state.messages),
+            preserved_message_ids=preserved_ids,
+        )
         compact_msg = system_message(
             "Conversation summary from earlier turns:\n"
             + summary
+            + _authoritative_state_context(self.state)
             + "\n\nContinue from this summary and the recent messages below."
         )
-        self.state.messages = [system, compact_msg, *recent]
+        boundary["summary_message_id"] = str(compact_msg.get("id", ""))
+        boundary["post_compact_message_count"] = 2 + len(recent)
+        boundary_msg = context_boundary_message(_format_context_boundary_notice(boundary), boundary)
+        self.state.compact_epoch += 1
+        self.state.context_boundaries.append(boundary)
+        self.state.messages = [system, compact_msg, boundary_msg, *recent]
         self.store.append(self.state.session_id, compact_msg)
+        self.store.append(self.state.session_id, boundary_msg)
         self.store.save_messages(self.state)
-        self._append(system_message("Context compacted: older messages were summarized locally."))
+        self.store.save_state(self.state)
+        self._append(system_message("Context compacted: older messages were summarized locally with planning state restored."))
         return True
 
     def _append(self, message: dict[str, Any]) -> None:
         self.state.messages.append(message)
+        self.state.state_revision += 1
+        if message.get("id"):
+            self.state.last_source_message_id = str(message["id"])
         self.store.append(self.state.session_id, message)
         if self.store.has_message_snapshot(self.state.session_id):
             self.store.save_messages(self.state)
@@ -160,3 +186,58 @@ def _summarize_messages(messages: list[dict[str, Any]]) -> str:
     if not lines:
         return "- No substantial prior content."
     return "\n".join(lines[-80:])
+
+
+def _build_context_boundary(
+    state: AgentState,
+    *,
+    pre_compact_message_count: int,
+    preserved_message_ids: list[str],
+) -> dict[str, Any]:
+    locked_plan = state.locked_plan if isinstance(state.locked_plan, dict) else {}
+    digest = state.maintenance_digest if isinstance(state.maintenance_digest, dict) else {}
+    return {
+        "boundary_id": new_id(),
+        "compact_epoch": state.compact_epoch + 1,
+        "pre_compact_message_count": pre_compact_message_count,
+        "post_compact_message_count": 0,
+        "summary_message_id": "",
+        "preserved_message_ids": preserved_message_ids,
+        "last_source_message_id": state.last_source_message_id,
+        "plan_id": str(locked_plan.get("plan_id", "")),
+        "plan_revision": int(locked_plan.get("revision", 0) or 0),
+        "digest_id": str(digest.get("digest_id", "")),
+        "digest_revision": int(digest.get("revision", 0) or 0),
+        "planning_status": state.planning_status,
+    }
+
+
+def _authoritative_state_context(state: AgentState) -> str:
+    parts: list[str] = []
+    if state.locked_plan:
+        parts.append(_compact_json_block("Current locked PlanArtifact", state.locked_plan))
+    elif state.plan_artifact_candidate:
+        parts.append(_compact_json_block("Current PlanArtifactCandidate", state.plan_artifact_candidate))
+    if state.maintenance_digest:
+        parts.append(_compact_json_block("Current MaintenanceDigest", state.maintenance_digest))
+    elif state.maintenance_digest_candidate:
+        parts.append(_compact_json_block("Current MaintenanceDigestCandidate", state.maintenance_digest_candidate))
+    if not parts:
+        return ""
+    return "\n\nAuthoritative runtime state restored after compaction:\n" + "\n".join(parts)
+
+
+def _compact_json_block(title: str, payload: dict[str, Any]) -> str:
+    return f"{title}:\n```json\n{json.dumps(payload, ensure_ascii=False, sort_keys=True)}\n```"
+
+
+def _format_context_boundary_notice(boundary: dict[str, Any]) -> str:
+    plan = boundary.get("plan_id") or "none"
+    digest = boundary.get("digest_id") or "none"
+    return (
+        "ContextBoundary: local compaction completed. "
+        f"epoch={boundary.get('compact_epoch')} "
+        f"plan={plan} "
+        f"digest={digest}. "
+        "Use the restored PlanArtifact and MaintenanceDigest as authoritative runtime state."
+    )

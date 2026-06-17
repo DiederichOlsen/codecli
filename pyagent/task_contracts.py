@@ -139,6 +139,41 @@ class TestIntentMapping:
 
 
 @dataclass(frozen=True)
+class DigestModule:
+    module: str
+    responsibility: str
+
+
+@dataclass(frozen=True)
+class DigestChangePath:
+    scenario: str
+    start_at: str
+    notes: str = ""
+
+
+@dataclass(frozen=True)
+class DigestTestIntent:
+    intent: str
+    checks: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class MaintenanceDigest:
+    mental_model: str
+    module_map: tuple[DigestModule, ...]
+    change_paths: tuple[DigestChangePath, ...]
+    extension_points: tuple[str, ...]
+    invariants: tuple[str, ...]
+    handoff_notes: tuple[str, ...]
+    test_intent_map: tuple[DigestTestIntent, ...] = ()
+    digest_id: str = field(default_factory=lambda: str(uuid4()))
+    revision: int = 1
+    source_plan_id: str = ""
+    source_message_id: str = ""
+    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+@dataclass(frozen=True)
 class MaintenanceModel:
     mental_model: str
     module_responsibilities: tuple[ModuleResponsibility, ...]
@@ -181,3 +216,4 @@ class PlanContract:
     risk_level: str
     user_confirmation_required: bool
     maintenance_model: MaintenanceModel | None = None
+    maintenance_digest: MaintenanceDigest | None = None

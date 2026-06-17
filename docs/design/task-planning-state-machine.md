@@ -11,7 +11,8 @@ RawTask
   -> IntentModel
   -> PlanOptions if IntentModel is blocked
   -> PlanContract if IntentModel is accepted
-  -> MaintenanceModel
+  -> MaintenanceDigestCandidate
+  -> DigestGate
   -> LockedPlan
   -> Execution
   -> Handoff
@@ -27,9 +28,12 @@ Interactive sessions support:
 
 ```text
 /plan-task draft <request>
+/plan-task show
+/plan-task export
 /plan-task lock [summary-or-json]
 /plan-task run
 /plan-task clear
+/mental-model
 /session load <session-id>
 ```
 
@@ -43,6 +47,7 @@ the planning artifacts visible enough for human review:
 - Does the intent match what the user meant?
 - Are non-goals and scope boundaries clear?
 - Is the selected approach backed by project evidence?
+- Does the MaintenanceDigest give the user a usable mental model?
 - Are implementation slices reviewable?
 - Do tests or docs protect the design intent?
 
@@ -50,6 +55,13 @@ Draft mode does not execute. `/plan-task lock` records the reviewed plan as a
 small `PlanArtifact` execution anchor. `/plan-task run` is the separate command
 that enters execution mode after the user has reviewed and optionally locked the
 plan.
+
+`/plan-task show` displays the current plan and `MaintenanceDigest` as a
+readable engineering map. `/plan-task export` writes the same view to
+`.pyagent/plans/<plan-id>.md` and a structured snapshot to
+`.pyagent/plans/<plan-id>.json` so the user can inspect the current contract and
+the runtime can retain plan identity, revision, source, and digest metadata
+outside the chat transcript.
 
 `/plan-task draft` is now backed by runtime state, not only prompt text. Drafting
 sets `AgentState.planning_status` to `drafting` and then `needs_confirmation`.
@@ -71,6 +83,12 @@ runtime then asks for a final `y/N` confirmation before locking and running.
 This is still not a full natural-language parser. The LLM may propose a
 `PlanArtifactCandidate` or transition decision, but the runtime validates and
 stores only the small structured artifact.
+
+Structured planning JSON is validated before it becomes runtime state.
+`PlanArtifactCandidate` and `MaintenanceDigestCandidate` use explicit schemas
+and report repair hints with field paths when parsing fails. For example, a
+string `planned_files` value is rejected with a message pointing at
+`$.planned_files`, rather than failing later as a vague invalid artifact.
 
 `/plan-task run` is the explicit transition into `executing`. Only then may the
 agent use implementation tools for the confirmed plan. If a locked artifact
@@ -99,8 +117,11 @@ Draft mode has one important branch rule:
 - It should output `PlanOptions` instead: conditional choices with
   `when_to_choose`, `evidence_needed`, `tradeoffs`, and only the first slice.
 - A full `PlanContract` is allowed only after the intent gate is acceptable.
-- A full `PlanContract` must include `MaintenanceModel` before implementation
-  slices.
+- A full `PlanContract` must produce a `MaintenanceDigestCandidate` before a
+  `PlanArtifactCandidate`.
+- A full `MaintenanceModel` is optional and intended for broad or architectural
+  tasks. If present, it is validated strictly; if absent, the digest remains the
+  user-facing hard requirement.
 
 This prevents the agent from filling in detailed implementation slices while
 the core intent, technology choice, or project scope is still unresolved.
@@ -149,8 +170,9 @@ Gate rule: a contract is not review-ready if the plan has no implementation
 slices, no file scope, no evidence, no tests or no-test rationale, missing docs
 for design intent changes, or high risk without user confirmation.
 
-It also cannot pass without a `MaintenanceModel`. File lists and slices explain
-how to build the result, but not how the user should understand and maintain it.
+It also cannot pass without a `MaintenanceDigestCandidate`. File lists and
+slices explain how to build the result, but the digest explains how the user
+should understand and maintain it.
 
 ## PlanArtifact
 
@@ -190,6 +212,23 @@ state such as `planning_status`, `planning_request`, `locked_plan`,
 verification records. On resume, PyAgent loads both the transcript and this
 state snapshot.
 
+The current plan is also exported through a lightweight `PlanStore`:
+
+```text
+.pyagent/plans/<plan-id>.json
+.pyagent/plans/<plan-id>.md
+```
+
+The PlanStore is not a full spec tree. It is a first-class snapshot of the
+reviewed plan and user mental model, useful for handoff, diffing, and future
+plan-version work.
+
+When local context compaction runs, PyAgent also records a `ContextBoundary` in
+runtime state and inserts a short system boundary message into the compacted
+message snapshot. The compacted summary re-injects the current `PlanArtifact`
+and `MaintenanceDigest`, so the model resumes from the small authoritative
+runtime state instead of relying only on a lossy prose summary.
+
 Interactive sessions can also switch context without restarting:
 
 ```text
@@ -206,8 +245,8 @@ lets the user manage separate planning/execution threads by session id.
 ## MaintenanceModel
 
 `MaintenanceModel` explains the project from the future maintainer's point of
-view. It must appear before implementation slices so the plan's structure is
-driven by maintainability, not merely by implementation order.
+view. It is optional for narrow tasks and useful for broad or architectural
+changes where the model needs more than a compact digest.
 
 It records:
 
@@ -221,14 +260,41 @@ It records:
 - test intent map: which checks protect which design intent;
 - handoff map: where the user should go to change common behavior.
 
-Gate rule: a plan cannot pass if the maintenance model has no mental model, no
-module responsibilities, fewer than three change scenarios, fewer than two
-extension points, no invariants, no dependency rules, no test intent map, or no
-handoff map.
+Gate rule: if a `MaintenanceModel` is produced, it must have a mental model,
+module responsibilities, at least three change scenarios, at least two extension
+points, invariants, dependency rules, a test intent map, and a handoff map. A
+missing `MaintenanceModel` does not block the plan if the `MaintenanceDigest`
+passes.
 
 This shifts `/plan-task draft` from "implementation plan generator" toward
 "maintainable project co-design." The user should see not only what files will
 exist, but why those boundaries exist and how to modify them later.
+
+## MaintenanceDigest
+
+`MaintenanceDigest` is the small, recoverable, user-facing form of
+`MaintenanceModel`. It is the current engineering mental model for a session,
+not an execution allowlist.
+
+It records:
+
+- digest id, revision, source plan id, source message id, and update time;
+- mental model;
+- module map;
+- change paths;
+- extension points;
+- invariants;
+- test intent map;
+- handoff notes.
+
+DigestGate requires a non-empty mental model, at least one module-map item, at
+least two change paths, at least one extension point, at least one invariant, and
+at least one handoff note. These are understanding constraints: they prevent a
+plan from becoming "review ready" while the user has no compact project map.
+
+`/mental-model` displays the locked digest for the current session. If only a
+candidate exists, the CLI can show it as draft context, but it becomes current
+only when the plan is locked.
 
 ## Behavior Principles
 
@@ -257,10 +323,10 @@ reviewable trail.
 Deviation records include the active plan id, plan revision, and current slice id
 when available. These fields are audit anchors, not execution blockers.
 
-Simplicity first is currently enforced through required `complexity_budget`
-entries in `MaintenanceModel` and a `ComplexityReview` shape for future checks.
-It is intentionally not a hard file-count rule because some simple solutions
-still need several files.
+Simplicity first is currently encouraged through optional `complexity_budget`
+entries in `MaintenanceModel`, the compact digest requirement, and a
+`ComplexityReview` shape for future checks. It is intentionally not a hard
+file-count rule because some simple solutions still need several files.
 
 ## PlanOptions
 

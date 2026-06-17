@@ -133,14 +133,15 @@ Docs:
 - `docs/design/task-planning-state-machine.md`
 - `docs/design/intent-ledger.md`
 
-## DT-MAINTAINABILITY-001: Maintenance Model Before Implementation Slices
+## DT-MAINTAINABILITY-001: Maintenance Digest Before Implementation Slices
 
-Intent: plans must explain how users will understand, maintain, and extend the
-result before listing implementation slices.
+Intent: plans must provide a compact user-facing engineering map before listing
+implementation slices.
 
 Rationale: a plan that only lists files and steps can still produce a project
-the user cannot confidently modify. MaintenanceModel makes module ownership,
-change paths, extension points, invariants, and handoff guidance explicit.
+the user cannot confidently modify. `MaintenanceDigest` makes module
+responsibility, change paths, extension points, invariants, and handoff guidance
+explicit without forcing every task to produce a full `MaintenanceModel`.
 
 Code:
 
@@ -210,6 +211,9 @@ runtime state, project memory, and design trace.
 Rationale: a CLI agent must resume with the same operational state it had before
 exit or session switching. The raw transcript is useful for audit, but compacted
 context and structured planning state need their own recoverable snapshots.
+Compaction records a `ContextBoundary` and re-injects the current
+`PlanArtifact` and `MaintenanceDigest` so important structure does not live only
+inside prose summaries.
 
 Code:
 
@@ -223,3 +227,26 @@ Docs:
 - `docs/design/memory-policy.md`
 - `docs/design/task-planning-state-machine.md`
 - `docs/design/test-intent-map.md`
+
+## DT-MAINTENANCE-DIGEST-001: User-Facing Engineering Mental Model
+
+Intent: each reviewed plan should produce a compact, recoverable mental model
+that helps the user understand, maintain, and extend the project.
+
+Rationale: execution contracts tell the agent what to do, but users need a
+stable map of module responsibilities, change paths, extension points,
+invariants, tests, and handoff notes. `MaintenanceDigest` makes that map a
+runtime state artifact instead of fragile transcript prose.
+
+Code:
+
+- `pyagent/task_contracts.py`
+- `pyagent/task_policies.py`
+- `pyagent/task_formatters.py`
+- `pyagent/cli.py`
+- `pyagent/storage.py`
+
+Docs:
+
+- `docs/design/task-planning-state-machine.md`
+- `docs/design/memory-policy.md`

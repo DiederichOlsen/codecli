@@ -58,6 +58,11 @@ class TranscriptStore:
 
     def save_state(self, state: AgentState) -> None:
         snapshot = {
+            "state_schema_version": state.state_schema_version,
+            "state_revision": state.state_revision,
+            "compact_epoch": state.compact_epoch,
+            "last_source_message_id": state.last_source_message_id,
+            "context_boundaries": state.context_boundaries,
             "planning_status": state.planning_status,
             "planning_request": state.planning_request,
             "current_goal": state.current_goal,
@@ -66,6 +71,8 @@ class TranscriptStore:
             "current_slice_id": state.current_slice_id,
             "planned_files": state.planned_files,
             "plan_artifact_candidate": state.plan_artifact_candidate,
+            "maintenance_digest_candidate": state.maintenance_digest_candidate,
+            "maintenance_digest": state.maintenance_digest,
             "locked_plan": state.locked_plan,
             "deviations": state.deviations,
             "todos": state.todos,
@@ -102,6 +109,7 @@ class TranscriptStore:
         if not isinstance(snapshot, dict):
             return
         for field in (
+            "last_source_message_id",
             "planning_status",
             "planning_request",
             "current_goal",
@@ -112,13 +120,23 @@ class TranscriptStore:
             value = snapshot.get(field)
             if isinstance(value, str):
                 setattr(state, field, value)
-        for field in ("planned_files", "deviations", "todos", "changed_files", "verification_commands"):
+        for field in ("planned_files", "deviations", "todos", "changed_files", "verification_commands", "context_boundaries"):
             value = snapshot.get(field)
             if isinstance(value, list):
+                setattr(state, field, value)
+        for field in ("state_schema_version", "state_revision", "compact_epoch"):
+            value = snapshot.get(field)
+            if isinstance(value, int):
                 setattr(state, field, value)
         plan_artifact_candidate = snapshot.get("plan_artifact_candidate")
         if isinstance(plan_artifact_candidate, dict):
             state.plan_artifact_candidate = plan_artifact_candidate
+        maintenance_digest_candidate = snapshot.get("maintenance_digest_candidate")
+        if isinstance(maintenance_digest_candidate, dict):
+            state.maintenance_digest_candidate = maintenance_digest_candidate
+        maintenance_digest = snapshot.get("maintenance_digest")
+        if isinstance(maintenance_digest, dict):
+            state.maintenance_digest = maintenance_digest
         locked_plan = snapshot.get("locked_plan")
         if isinstance(locked_plan, dict):
             state.locked_plan = locked_plan

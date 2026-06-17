@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
-from pyagent.cli import _handle_plan_review_message, _run_plan_task_command, _run_session_command
+from pyagent.cli import _handle_plan_review_message, _print_mental_model, _run_plan_task_command, _run_session_command
 from pyagent.storage import TranscriptStore
 
 
@@ -17,6 +18,11 @@ class FakeAgent:
         self.config = SimpleNamespace(permission_mode="default")
         self.permissions = SimpleNamespace(mode="default")
         self.state = SimpleNamespace(
+            state_schema_version=2,
+            state_revision=0,
+            compact_epoch=0,
+            last_source_message_id="",
+            context_boundaries=[],
             planning_status="idle",
             planning_request="",
             current_goal="",
@@ -25,6 +31,8 @@ class FakeAgent:
             current_slice_id="",
             planned_files=[],
             plan_artifact_candidate={},
+            maintenance_digest_candidate={},
+            maintenance_digest={},
             locked_plan={},
             deviations=[],
             messages=[],
@@ -175,7 +183,16 @@ class PlanTaskCliTests(unittest.TestCase):
             '"files":["pyagent/cli.py"],"check":"python -m unittest tests.test_plan_task_cli"}],'
             '"current_slice_id":"slice-1",'
             '"current_step":"Implement CLI lock",'
-            '"verification":["python -m unittest tests.test_plan_task_cli"]}'
+            '"verification":["python -m unittest tests.test_plan_task_cli"],'
+            '"maintenance_digest":{"digest_id":"digest-123","revision":3,'
+            '"mental_model":"PyAgent planning keeps execution state separate from user understanding.",'
+            '"module_map":[{"module":"pyagent/cli.py","responsibility":"Owns plan-task commands and state display."}],'
+            '"change_paths":[{"scenario":"Change plan commands","start_at":"pyagent/cli.py","notes":"Update CLI tests."},'
+            '{"scenario":"Change planning contracts","start_at":"pyagent/task_contracts.py","notes":"Update policy tests."}],'
+            '"extension_points":["Add new planning state fields in AgentState."],'
+            '"invariants":["MaintenanceDigest is user-facing, not a file allowlist."],'
+            '"test_intent_map":[{"intent":"Digest survives session save/load","checks":["tests/test_plan_task_cli.py"]}],'
+            '"handoff_notes":["Run /mental-model before modifying planning flow."]}}'
         )
 
         with contextlib.redirect_stdout(io.StringIO()):
@@ -189,6 +206,149 @@ class PlanTaskCliTests(unittest.TestCase):
         self.assertEqual(agent.state.locked_plan["slices"][0]["id"], "slice-1")
         self.assertEqual(agent.state.locked_plan["verification"], ["python -m unittest tests.test_plan_task_cli"])
         self.assertTrue(agent.state.locked_plan["confirmed_at"])
+        self.assertEqual(agent.state.maintenance_digest["digest_id"], "digest-123")
+        self.assertEqual(agent.state.maintenance_digest["source_plan_id"], "plan-123")
+        self.assertIn("user-facing", agent.state.maintenance_digest["invariants"][0])
+
+    def test_mental_model_displays_current_digest(self) -> None:
+        agent = FakeAgent()
+        agent.state.maintenance_digest = {
+            "digest_id": "digest-123",
+            "revision": 1,
+            "source_plan_id": "plan-123",
+            "source_message_id": "assistant-1",
+            "updated_at": "2026-06-08T00:00:00+00:00",
+            "mental_model": "PyAgent separates execution contracts from user mental models.",
+            "module_map": [
+                {
+                    "module": "pyagent/cli.py",
+                    "responsibility": "Displays planning and maintenance state.",
+                }
+            ],
+            "change_paths": [
+                {
+                    "scenario": "Change CLI planning display.",
+                    "start_at": "pyagent/cli.py",
+                    "notes": "Update CLI tests.",
+                },
+                {
+                    "scenario": "Change planning gates.",
+                    "start_at": "pyagent/task_policies.py",
+                    "notes": "Update policy tests.",
+                },
+            ],
+            "extension_points": ["Add new digest fields in task_contracts.py."],
+            "invariants": ["Digest must stay user-facing."],
+            "test_intent_map": [
+                {
+                    "intent": "Digest display is readable.",
+                    "checks": ["tests/test_plan_task_cli.py"],
+                }
+            ],
+            "handoff_notes": ["Use /mental-model to inspect the current digest."],
+        }
+
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            _print_mental_model(agent)
+
+        text = output.getvalue()
+        self.assertIn("MaintenanceDigest", text)
+        self.assertIn("PyAgent separates execution contracts", text)
+        self.assertIn("pyagent/cli.py", text)
+
+    def test_plan_task_show_displays_plan_and_digest(self) -> None:
+        agent = FakeAgent()
+        agent.state.planning_status = "locked"
+        agent.state.planning_request = "Add a planning command"
+        agent.state.locked_plan = {
+            "plan_id": "plan-123",
+            "revision": 2,
+            "goal": "Add lock command",
+            "summary": "Lock reviewed plan",
+            "planned_files": ["pyagent/cli.py"],
+            "current_step": "Implement CLI lock",
+        }
+        agent.state.maintenance_digest = {
+            "digest_id": "digest-123",
+            "revision": 1,
+            "mental_model": "Plan state is separate from user understanding.",
+            "module_map": [{"module": "pyagent/cli.py", "responsibility": "Displays plan state."}],
+            "change_paths": [
+                {"scenario": "Change plan commands", "start_at": "pyagent/cli.py", "notes": "Update CLI tests."},
+                {"scenario": "Change planning gates", "start_at": "pyagent/task_policies.py", "notes": "Update policy tests."},
+            ],
+            "extension_points": ["Add planning commands in pyagent/cli.py."],
+            "invariants": ["Digest remains user-facing."],
+            "handoff_notes": ["Review /plan-task show before running."],
+        }
+        config = SimpleNamespace(api_key="test-key")
+
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            _run_plan_task_command(agent, config, "/plan-task show")
+
+        text = output.getvalue()
+        self.assertIn("# Add lock command", text)
+        self.assertIn("PlanArtifact", text)
+        self.assertIn("MaintenanceDigest", text)
+        self.assertIn("Plan state is separate", text)
+
+    def test_plan_task_export_writes_markdown_plan_view(self) -> None:
+        agent = FakeAgent()
+        agent.state.planning_status = "locked"
+        agent.state.locked_plan = {
+            "plan_id": "plan-123",
+            "goal": "Add lock command",
+            "summary": "Lock reviewed plan",
+            "planned_files": ["pyagent/cli.py"],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            config = SimpleNamespace(api_key="test-key", config_dir=Path(tmp) / ".pyagent")
+
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                _run_plan_task_command(agent, config, "/plan-task export")
+
+            path = config.config_dir / "plans" / "plan-123.md"
+            snapshot_path = config.config_dir / "plans" / "plan-123.json"
+            self.assertTrue(path.exists())
+            self.assertTrue(snapshot_path.exists())
+            self.assertIn("plan exported", output.getvalue())
+            self.assertIn("plan snapshot", output.getvalue())
+            self.assertIn("Lock reviewed plan", path.read_text(encoding="utf-8"))
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            self.assertEqual(snapshot["plan_id"], "plan-123")
+            self.assertEqual(snapshot["artifact"]["summary"], "Lock reviewed plan")
+
+    def test_plan_task_lock_persists_plan_store_snapshot(self) -> None:
+        agent = FakeAgent()
+        agent.state.planning_status = "needs_confirmation"
+        agent.state.planning_request = "Add a planning command"
+        artifact = (
+            '{"plan_id":"plan-store-123","goal":"Add lock command",'
+            '"summary":"Lock reviewed plan",'
+            '"planned_files":["pyagent/cli.py"],'
+            '"maintenance_digest":{"digest_id":"digest-store-123","revision":1,'
+            '"mental_model":"PlanStore snapshots keep a user-visible planning map.",'
+            '"module_map":[{"module":"pyagent/cli.py","responsibility":"Owns plan commands."}],'
+            '"change_paths":[{"scenario":"Change plan commands","start_at":"pyagent/cli.py","notes":"Update CLI tests."},'
+            '{"scenario":"Change plan storage","start_at":"pyagent/plan_store.py","notes":"Update PlanStore tests."}],'
+            '"extension_points":["Add fields to PlanStore snapshot schema."],'
+            '"invariants":["PlanStore does not replace session state."],'
+            '"handoff_notes":["Inspect exported markdown before handoff."]}}'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            config = SimpleNamespace(api_key="test-key", config_dir=Path(tmp) / ".pyagent")
+
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                _run_plan_task_command(agent, config, f"/plan-task lock {artifact}")
+
+            snapshot_path = config.config_dir / "plans" / "plan-store-123.json"
+            markdown_path = config.config_dir / "plans" / "plan-store-123.md"
+            self.assertTrue(snapshot_path.exists())
+            self.assertTrue(markdown_path.exists())
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            self.assertEqual(snapshot["artifact"]["plan_id"], "plan-store-123")
+            self.assertEqual(snapshot["maintenance_digest"]["digest_id"], "digest-store-123")
+            self.assertIn("plan stored", output.getvalue())
 
     def test_plan_task_lock_rejects_absolute_planned_file(self) -> None:
         agent = FakeAgent()
@@ -205,6 +365,21 @@ class PlanTaskCliTests(unittest.TestCase):
 
         self.assertEqual(agent.state.planning_status, "needs_confirmation")
         self.assertIn("workspace-relative", output.getvalue())
+
+    def test_plan_task_lock_reports_schema_repair_hint(self) -> None:
+        agent = FakeAgent()
+        agent.state.planning_status = "needs_confirmation"
+        agent.state.planning_request = "Add a planning command"
+        config = SimpleNamespace(api_key="test-key")
+        artifact = '{"goal":"Add lock command","summary":"Lock reviewed plan","planned_files":"pyagent/cli.py"}'
+
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            _run_plan_task_command(agent, config, f"/plan-task lock {artifact}")
+
+        text = output.getvalue()
+        self.assertEqual(agent.state.planning_status, "needs_confirmation")
+        self.assertIn("PlanArtifactCandidate schema validation failed", text)
+        self.assertIn("$.planned_files: must be array", text)
 
     def test_plan_task_run_uses_locked_plan_summary(self) -> None:
         agent = FakeAgent()
@@ -233,6 +408,8 @@ class PlanTaskCliTests(unittest.TestCase):
         agent.state.planning_status = "needs_confirmation"
         agent.state.planning_request = "Add a planning command"
         agent.state.plan_artifact_candidate = {"goal": "Candidate"}
+        agent.state.maintenance_digest_candidate = {"digest_id": "Candidate"}
+        agent.state.maintenance_digest = {"digest_id": "Locked"}
         agent.state.locked_plan = {"goal": "Add a planning command"}
         config = SimpleNamespace(api_key="test-key")
 
@@ -244,6 +421,8 @@ class PlanTaskCliTests(unittest.TestCase):
         self.assertEqual(agent.state.current_goal, "")
         self.assertEqual(agent.state.current_slice_id, "")
         self.assertEqual(agent.state.plan_artifact_candidate, {})
+        self.assertEqual(agent.state.maintenance_digest_candidate, {})
+        self.assertEqual(agent.state.maintenance_digest, {})
         self.assertEqual(agent.state.locked_plan, {})
 
     def test_plan_review_message_uses_model_transition_decision_to_lock_and_run(self) -> None:
@@ -370,6 +549,20 @@ class PlanTaskCliTests(unittest.TestCase):
             target.current_goal = "Target goal"
             target.locked_plan = {"goal": "Target goal", "summary": "Target plan"}
             target.current_slice_id = "slice-target"
+            target.maintenance_digest = {
+                "digest_id": "digest-target",
+                "revision": 1,
+                "mental_model": "Target session mental model.",
+                "module_map": [{"module": "pyagent/cli.py", "responsibility": "CLI state display."}],
+                "change_paths": [
+                    {"scenario": "Change CLI", "start_at": "pyagent/cli.py"},
+                    {"scenario": "Change storage", "start_at": "pyagent/storage.py"},
+                ],
+                "extension_points": ["Add fields to AgentState."],
+                "invariants": ["State stays JSON-compatible."],
+                "test_intent_map": [],
+                "handoff_notes": ["Inspect /mental-model after load."],
+            }
             store.save_state(target)
 
             with contextlib.redirect_stdout(io.StringIO()) as output:
@@ -381,6 +574,7 @@ class PlanTaskCliTests(unittest.TestCase):
         self.assertEqual(agent.state.planning_status, "locked")
         self.assertEqual(agent.state.current_goal, "Target goal")
         self.assertEqual(agent.state.current_slice_id, "slice-target")
+        self.assertEqual(agent.state.maintenance_digest["digest_id"], "digest-target")
         self.assertEqual(old.planning_status, "needs_confirmation")
         self.assertIn("session switched", output.getvalue())
 

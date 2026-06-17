@@ -28,6 +28,8 @@ def build_system_prompt(cwd: Path, tool_names: list[str]) -> str:
         "- Simplicity first: prefer the smallest design that satisfies the current goal.",
         "- Surgical changes: change only files and behavior needed for the task.",
         "- Goal-driven execution: every tool call and edit should advance the stated goal.",
+        "- For unfamiliar projects, prefer ProjectTree, GitStatus, GitDiff, Grep, FileOutline, and Read to build context before editing.",
+        "- Use GitDiff to inspect local changes before summarizing or handing off work.",
         "",
         recommendation_protocol_prompt(),
         "",

@@ -10,6 +10,9 @@ from . import ui
 from .tools.bash_policy import BashPolicy
 
 
+DEFAULT_READ_ONLY_TOOLS = {"Read", "Grep", "Glob", "TodoWrite"}
+
+
 @dataclass
 class PermissionDecision:
     behavior: str
@@ -37,11 +40,20 @@ class PermissionDecision:
 
 
 class PermissionManager:
-    def __init__(self, *, cwd: Path, config_dir: Path, mode: str = "default", interactive: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        cwd: Path,
+        config_dir: Path,
+        mode: str = "default",
+        interactive: bool = True,
+        read_only_tools: Optional[set[str]] = None,
+    ) -> None:
         self.cwd = cwd.resolve()
         self.config_dir = config_dir
         self.mode = mode
         self.interactive = interactive
+        self.read_only_tools = set(read_only_tools or DEFAULT_READ_ONLY_TOOLS)
         self.rules = self._load_rules()
         self.bash_policy = BashPolicy()
 
@@ -51,7 +63,7 @@ class PermissionManager:
             return explicit
 
         if self.mode == "plan":
-            if tool_name in {"Read", "Grep", "Glob", "TodoWrite"}:
+            if tool_name in self.read_only_tools:
                 return PermissionDecision(
                     "allow",
                     "plan mode read-only tool",
@@ -101,6 +113,16 @@ class PermissionManager:
                 "allow",
                 "read-only tool",
                 policy="ToolPolicy",
+                classification="readonly",
+                risk_tags=["readonly"],
+                normalized_input=self._rule_target(tool_name, args),
+            )
+
+        if tool_name in self.read_only_tools:
+            return PermissionDecision(
+                "allow",
+                "read-only workspace inspection tool",
+                policy="ToolMetadataPolicy",
                 classification="readonly",
                 risk_tags=["readonly"],
                 normalized_input=self._rule_target(tool_name, args),

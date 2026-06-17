@@ -15,6 +15,9 @@ from pyagent.tools.base import ToolContext, ToolResult
 from pyagent.tools.bash import BashTool
 from pyagent.tools.executor import ToolExecutor, validate_args
 from pyagent.tools.files import EditTool, ReadTool, WriteTool
+from pyagent.tools.git import GitDiffTool, GitStatusTool
+from pyagent.tools.outline import FileOutlineTool
+from pyagent.tools.project import ProjectTreeTool
 from pyagent.tools.registry import ToolRegistry
 from pyagent.tools.scheduler import ToolScheduler
 
@@ -70,6 +73,7 @@ def make_executor(cwd: Path, registry: ToolRegistry) -> ToolExecutor:
             config_dir=cwd / ".pyagent",
             mode="accept_edits",
             interactive=False,
+            read_only_tools=registry.read_only_names(),
         ),
         context=make_context(cwd),
     )
@@ -78,9 +82,35 @@ def make_executor(cwd: Path, registry: ToolRegistry) -> ToolExecutor:
 class ToolRuntimeTests(unittest.TestCase):
     def test_validate_args_reports_required_and_type_errors(self) -> None:
         schema = FakeTool.parameters
-        self.assertEqual(validate_args(schema, {}), "missing required field: value")
-        self.assertEqual(validate_args(schema, {"value": 1}), "field value must be string")
+        self.assertEqual(validate_args(schema, {}), "$.value: required")
+        self.assertEqual(validate_args(schema, {"value": 1}), "$.value: must be string")
         self.assertEqual(validate_args(schema, {"value": "hello"}), "")
+
+    def test_validate_args_reports_nested_schema_errors(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "minItems": 2,
+                    "items": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["items"],
+            "additionalProperties": False,
+        }
+
+        error = validate_args(schema, {"items": [{"extra": 1}], "unknown": True})
+
+        self.assertIn("$.items: must contain at least 2 item(s)", error)
+        self.assertIn("$.items[0].name: required", error)
+        self.assertIn("$.items[0].extra: unknown field", error)
+        self.assertIn("$.unknown: unknown field", error)
 
     def test_executor_returns_tool_result_for_invalid_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -120,6 +150,92 @@ class ToolRuntimeTests(unittest.TestCase):
             self.assertIn("schema", display)
             self.assertIn("permission", display)
             self.assertIn("result", display)
+
+    def test_registry_includes_git_and_project_orientation_tools(self) -> None:
+        registry = ToolRegistry()
+        names = registry.names()
+
+        self.assertIn("GitStatus", names)
+        self.assertIn("GitDiff", names)
+        self.assertIn("GitBlame", names)
+        self.assertIn("ProjectTree", names)
+        self.assertIn("FileOutline", names)
+
+    def test_read_only_permission_comes_from_tool_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = ToolRegistry([FakeTool()])
+            permissions = PermissionManager(
+                cwd=root,
+                config_dir=root / ".pyagent",
+                mode="plan",
+                interactive=False,
+                read_only_tools=registry.read_only_names(),
+            )
+
+            decision = permissions.decide("Fake", {"value": "ok"})
+
+            self.assertTrue(decision.allowed)
+            self.assertEqual(decision.policy, "ModePolicy")
+
+    def test_project_tree_skips_noise_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyagent").mkdir()
+            (root / "pyagent" / "agent.py").write_text("", encoding="utf-8")
+            (root / ".git").mkdir()
+            (root / ".git" / "config").write_text("", encoding="utf-8")
+            ctx = make_context(root)
+
+            result = ProjectTreeTool().run({"max_depth": 2}, ctx)
+
+            self.assertTrue(result.success)
+            self.assertIn("pyagent/", result.content)
+            self.assertIn("pyagent/agent.py", result.content)
+            self.assertNotIn(".git", result.content)
+
+    def test_file_outline_extracts_python_symbols(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "sample.py").write_text(
+                "import os\n"
+                "from pathlib import Path\n\n"
+                "class Example:\n"
+                "    def method(self):\n"
+                "        pass\n\n"
+                "async def run():\n"
+                "    pass\n",
+                encoding="utf-8",
+            )
+
+            result = FileOutlineTool().run({"file_path": "sample.py"}, make_context(root))
+
+            self.assertTrue(result.success)
+            self.assertIn("file: sample.py", result.content)
+            self.assertIn("import os", result.content)
+            self.assertIn("class Example:4", result.content)
+            self.assertIn("def method:5", result.content)
+            self.assertIn("async def run:8", result.content)
+
+    def test_file_outline_rejects_path_outside_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = FileOutlineTool().run({"file_path": "../outside.py"}, make_context(Path(tmp)))
+
+            self.assertFalse(result.success)
+            self.assertIn("inside workspace", result.content)
+
+    def test_git_diff_rejects_path_outside_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = GitDiffTool().run({"path": "../outside.txt"}, make_context(Path(tmp)))
+
+            self.assertFalse(result.success)
+            self.assertIn("inside workspace", result.content)
+
+    def test_git_status_is_read_only_tool(self) -> None:
+        tool = GitStatusTool()
+
+        self.assertTrue(tool.read_only)
+        self.assertTrue(tool.concurrency_safe)
 
     def test_executor_writes_runtime_audit_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

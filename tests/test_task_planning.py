@@ -4,10 +4,14 @@ import unittest
 
 from pyagent.task_planning import (
     ComplexityReview,
+    DigestChangePath,
+    DigestModule,
+    DigestTestIntent,
     ImplementationSlice,
     IntentModel,
     ChangeScenario,
     MaintenanceModel,
+    MaintenanceDigest,
     ModuleResponsibility,
     PlanArtifact,
     PlanArtifactSlice,
@@ -16,6 +20,7 @@ from pyagent.task_planning import (
     PlanOption,
     TestIntentMapping,
     build_plan_artifact,
+    build_maintenance_digest,
     build_goal_anchor,
     build_plan_review_transition_prompt,
     build_plan_task_draft_prompt,
@@ -24,11 +29,13 @@ from pyagent.task_planning import (
     format_gate_result,
     format_intent_model,
     format_maintenance_model,
+    format_maintenance_digest,
     format_plan_contract,
     format_plan_options,
     lock_plan_artifact,
     validate_complexity_review,
     validate_maintenance_model,
+    validate_maintenance_digest,
     validate_intent_model,
     validate_plan_artifact,
     validate_plan_contract,
@@ -131,6 +138,41 @@ def valid_maintenance_model(**overrides: object) -> MaintenanceModel:
     return MaintenanceModel(**data)
 
 
+def valid_maintenance_digest(**overrides: object) -> MaintenanceDigest:
+    data = {
+        "mental_model": "PyAgent is a CLI runtime with explicit planning, tool, and memory policies.",
+        "module_map": (
+            DigestModule(
+                module="pyagent/task_contracts.py",
+                responsibility="Defines planning and maintenance data contracts.",
+            ),
+        ),
+        "change_paths": (
+            DigestChangePath(
+                scenario="Change planning gates.",
+                start_at="pyagent/task_policies.py",
+                notes="Update validators and matching tests together.",
+            ),
+            DigestChangePath(
+                scenario="Change CLI planning commands.",
+                start_at="pyagent/cli.py",
+                notes="Keep storage and plan-task tests aligned.",
+            ),
+        ),
+        "extension_points": ("Add new planning artifacts in task_contracts.py.",),
+        "invariants": ("Runtime state must stay JSON-compatible.",),
+        "test_intent_map": (
+            DigestTestIntent(
+                intent="Planning artifacts remain recoverable after resume.",
+                checks=("tests/test_plan_task_cli.py",),
+            ),
+        ),
+        "handoff_notes": ("Start with /mental-model to understand current module boundaries.",),
+    }
+    data.update(overrides)
+    return MaintenanceDigest(**data)
+
+
 def valid_plan_contract(**overrides: object) -> PlanContract:
     data = {
         "task_id": "task-1",
@@ -166,6 +208,7 @@ def valid_plan_contract(**overrides: object) -> PlanContract:
         "risk_level": "medium",
         "user_confirmation_required": False,
         "maintenance_model": valid_maintenance_model(),
+        "maintenance_digest": valid_maintenance_digest(),
     }
     data.update(overrides)
     return PlanContract(**data)
@@ -217,6 +260,36 @@ class TaskPlanningTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
 
+    def test_valid_maintenance_digest_passes_gate(self) -> None:
+        result = validate_maintenance_digest(valid_maintenance_digest())
+
+        self.assertTrue(result.ok)
+
+    def test_maintenance_digest_requires_user_mental_model_fields(self) -> None:
+        result = validate_maintenance_digest(
+            valid_maintenance_digest(
+                mental_model="",
+                module_map=(),
+                change_paths=(
+                    DigestChangePath(
+                        scenario="Change planning gates.",
+                        start_at="pyagent/task_policies.py",
+                    ),
+                ),
+                extension_points=(),
+                invariants=(),
+                handoff_notes=(),
+            )
+        )
+        fields = [issue.field for issue in result.issues]
+
+        self.assertIn("mental_model", fields)
+        self.assertIn("module_map", fields)
+        self.assertIn("change_paths", fields)
+        self.assertIn("extension_points", fields)
+        self.assertIn("invariants", fields)
+        self.assertIn("handoff_notes", fields)
+
     def test_maintenance_model_requires_handoff_and_change_scenarios(self) -> None:
         result = validate_maintenance_model(
             valid_maintenance_model(
@@ -233,11 +306,16 @@ class TaskPlanningTests(unittest.TestCase):
         self.assertIn("extension_points", fields)
         self.assertIn("handoff_map", fields)
 
-    def test_plan_contract_requires_maintenance_model(self) -> None:
+    def test_plan_contract_allows_digest_without_full_maintenance_model(self) -> None:
         result = validate_plan_contract(valid_plan_contract(maintenance_model=None))
 
+        self.assertTrue(result.ok)
+
+    def test_plan_contract_requires_maintenance_digest_candidate(self) -> None:
+        result = validate_plan_contract(valid_plan_contract(maintenance_digest=None))
+
         self.assertFalse(result.ok)
-        self.assertIn("maintenance_model", [issue.field for issue in result.issues])
+        self.assertIn("maintenance_digest", [issue.field for issue in result.issues])
 
     def test_plan_contract_requires_tests_or_explicit_no_test_rationale(self) -> None:
         result = validate_plan_contract(valid_plan_contract(tests=(), no_tests_rationale=""))
@@ -302,9 +380,13 @@ class TaskPlanningTests(unittest.TestCase):
         self.assertIn("If IntentModel gate is blocked, do not draft a full PlanContract", prompt)
         self.assertIn("PlanOptions", prompt)
         self.assertIn("PlanContract gate: not reached", prompt)
-        self.assertIn("MaintenanceModel before implementation_slices", prompt)
+        self.assertIn("MaintenanceDigestCandidate before implementation_slices", prompt)
+        self.assertIn("Optional MaintenanceModel", prompt)
         self.assertIn("change_scenarios", prompt)
+        self.assertIn("MaintenanceDigest candidate", prompt)
+        self.assertIn("DigestGate", prompt)
         self.assertIn("PlanArtifactCandidate", prompt)
+        self.assertIn("maintenance_digest", prompt)
         self.assertIn("non_goals", prompt)
         self.assertIn("current_slice_id", prompt)
         self.assertIn("verification", prompt)
@@ -438,6 +520,15 @@ class TaskPlanningTests(unittest.TestCase):
         self.assertIn("module_responsibilities", text)
         self.assertIn("change_scenarios", text)
         self.assertIn("handoff_map", text)
+
+    def test_maintenance_digest_formatter_shows_user_mental_model(self) -> None:
+        text = format_maintenance_digest(valid_maintenance_digest())
+
+        self.assertIn("MaintenanceDigest", text)
+        self.assertIn("mental_model", text)
+        self.assertIn("module_map", text)
+        self.assertIn("change_paths", text)
+        self.assertIn("handoff_notes", text)
 
     def test_plan_options_require_conditional_evidence_driven_choices(self) -> None:
         options = (

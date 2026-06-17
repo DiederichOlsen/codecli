@@ -128,12 +128,13 @@ DESIGN_INTENTS: tuple[DesignIntent, ...] = (
     ),
     DesignIntent(
         id="DT-MAINTAINABILITY-001",
-        title="Maintenance model before implementation slices",
-        intent="Plans must explain how users will understand, maintain, and extend the result before listing implementation slices.",
+        title="Maintenance digest before implementation slices",
+        intent="Plans must provide a compact user-facing engineering map before listing implementation slices.",
         rationale=(
             "A plan that only lists files and steps can still produce a project the "
-            "user cannot confidently modify. MaintenanceModel makes module ownership, "
-            "change paths, extension points, invariants, and handoff guidance explicit."
+            "user cannot confidently modify. MaintenanceDigest makes module responsibility, "
+            "change paths, extension points, invariants, and handoff guidance explicit "
+            "without forcing every task to produce a full MaintenanceModel."
         ),
         code_paths=("pyagent/task_contracts.py", "pyagent/task_policies.py", "pyagent/task_formatters.py"),
         test_paths=("tests/test_task_planning.py",),
@@ -173,7 +174,9 @@ DESIGN_INTENTS: tuple[DesignIntent, ...] = (
         rationale=(
             "A CLI agent must resume with the same operational state it had before "
             "exit or session switching. The raw transcript is useful for audit, but "
-            "compacted context and structured planning state need their own recoverable snapshots."
+            "compacted context and structured planning state need their own recoverable "
+            "snapshots. ContextBoundary records compaction epochs and re-injects the "
+            "current PlanArtifact and MaintenanceDigest."
         ),
         code_paths=("pyagent/agent.py", "pyagent/messages.py", "pyagent/storage.py", "pyagent/cli.py"),
         test_paths=(
@@ -186,6 +189,60 @@ DESIGN_INTENTS: tuple[DesignIntent, ...] = (
             "docs/design/task-planning-state-machine.md",
             "docs/design/test-intent-map.md",
         ),
+    ),
+    DesignIntent(
+        id="DT-MAINTENANCE-DIGEST-001",
+        title="User-facing engineering mental model",
+        intent="Each reviewed plan should produce a compact, recoverable mental model for the user.",
+        rationale=(
+            "Execution contracts tell the agent what to do, but users need a stable "
+            "map of module responsibilities, change paths, extension points, "
+            "invariants, tests, and handoff notes."
+        ),
+        code_paths=(
+            "pyagent/task_contracts.py",
+            "pyagent/task_policies.py",
+            "pyagent/task_formatters.py",
+            "pyagent/cli.py",
+            "pyagent/storage.py",
+        ),
+        test_paths=(
+            "tests/test_task_planning.py::test_valid_maintenance_digest_passes_gate",
+            "tests/test_plan_task_cli.py::test_mental_model_displays_current_digest",
+            "tests/test_plan_task_cli.py::test_plan_task_lock_accepts_lightweight_execution_contract",
+        ),
+        docs=("docs/design/task-planning-state-machine.md", "docs/design/memory-policy.md"),
+    ),
+    DesignIntent(
+        id="DT-SCHEMA-001",
+        title="Shared schema validation",
+        intent="Tool arguments and planning artifacts should fail with precise, repairable schema errors.",
+        rationale=(
+            "Agent quality drops when malformed JSON fails late or vaguely. A shared "
+            "JSON Schema subset gives both tool calls and PlanArtifact/MaintenanceDigest "
+            "candidates path-specific repair hints."
+        ),
+        code_paths=("pyagent/schema_validation.py", "pyagent/plan_schemas.py", "pyagent/tools/executor.py"),
+        test_paths=(
+            "tests/test_tools_runtime.py::test_validate_args_reports_nested_schema_errors",
+            "tests/test_plan_task_cli.py::test_plan_task_lock_reports_schema_repair_hint",
+        ),
+        docs=("docs/architecture.md", "docs/design/task-planning-state-machine.md"),
+    ),
+    DesignIntent(
+        id="DT-TOOLS-002",
+        title="Read-only orientation tools",
+        intent="The agent should have narrow read-only tools for project orientation before editing.",
+        rationale=(
+            "ProjectTree and Git tools improve planning evidence, reduce blind edits, "
+            "and give better handoff summaries without expanding shell permissions."
+        ),
+        code_paths=("pyagent/tools/git.py", "pyagent/tools/project.py", "pyagent/tools/registry.py", "pyagent/permissions.py"),
+        test_paths=(
+            "tests/test_tools_runtime.py::test_registry_includes_git_and_project_orientation_tools",
+            "tests/test_tools_runtime.py::test_project_tree_skips_noise_directories",
+        ),
+        docs=("docs/architecture.md",),
     ),
 )
 

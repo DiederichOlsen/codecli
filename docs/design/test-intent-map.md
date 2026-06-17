@@ -117,3 +117,16 @@ Tests:
 - `tests/test_plan_task_cli.py::test_transcript_store_load_prefers_compacted_message_snapshot`
 - `tests/test_plan_task_cli.py::test_plan_review_confirmation_uses_saved_plan_artifact_candidate`
 - `tests/test_plan_task_cli.py::test_session_load_saves_current_and_switches_context`
+
+## DT-MAINTENANCE-DIGEST-001: User-Facing Engineering Mental Model
+
+Intent: each reviewed plan should produce a compact, recoverable mental model
+for the user.
+
+Tests:
+
+- `tests/test_task_planning.py::test_valid_maintenance_digest_passes_gate`
+- `tests/test_task_planning.py::test_maintenance_digest_requires_user_mental_model_fields`
+- `tests/test_task_planning.py::test_plan_contract_requires_maintenance_digest_candidate`
+- `tests/test_plan_task_cli.py::test_mental_model_displays_current_digest`
+- `tests/test_plan_task_cli.py::test_plan_task_lock_accepts_lightweight_execution_contract`

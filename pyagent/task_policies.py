@@ -5,10 +5,14 @@ from datetime import datetime, timezone
 from .task_contracts import (
     ComplexityReview,
     DeviationRecord,
+    DigestChangePath,
+    DigestModule,
+    DigestTestIntent,
     GateIssue,
     GateResult,
     GoalAnchor,
     IntentModel,
+    MaintenanceDigest,
     MaintenanceModel,
     PlanArtifact,
     PlanArtifactSlice,
@@ -239,6 +243,64 @@ def validate_maintenance_model(model: MaintenanceModel) -> GateResult:
     return GateResult(tuple(issues))
 
 
+def build_maintenance_digest(
+    *,
+    mental_model: str,
+    module_map: tuple[DigestModule, ...],
+    change_paths: tuple[DigestChangePath, ...],
+    extension_points: tuple[str, ...],
+    invariants: tuple[str, ...],
+    handoff_notes: tuple[str, ...],
+    test_intent_map: tuple[DigestTestIntent, ...] = (),
+    digest_id: str = "",
+    revision: int = 1,
+    source_plan_id: str = "",
+    source_message_id: str = "",
+    updated_at: str = "",
+) -> MaintenanceDigest:
+    return MaintenanceDigest(
+        mental_model=mental_model.strip(),
+        module_map=tuple(module_map),
+        change_paths=tuple(change_paths),
+        extension_points=tuple(item.strip() for item in extension_points if item.strip()),
+        invariants=tuple(item.strip() for item in invariants if item.strip()),
+        handoff_notes=tuple(item.strip() for item in handoff_notes if item.strip()),
+        test_intent_map=tuple(test_intent_map),
+        **({"digest_id": digest_id.strip()} if digest_id.strip() else {}),
+        revision=max(1, int(revision or 1)),
+        source_plan_id=source_plan_id.strip(),
+        source_message_id=source_message_id.strip(),
+        updated_at=updated_at.strip() or _utc_now(),
+    )
+
+
+def validate_maintenance_digest(digest: MaintenanceDigest) -> GateResult:
+    issues: list[GateIssue] = []
+    _require_text(issues, "mental_model", digest.mental_model)
+    _require_items(issues, "module_map", digest.module_map)
+    _require_min_items(issues, "change_paths", digest.change_paths, 2)
+    _require_items(issues, "extension_points", digest.extension_points)
+    _require_items(issues, "invariants", digest.invariants)
+    _require_items(issues, "handoff_notes", digest.handoff_notes)
+    _require_text(issues, "digest_id", digest.digest_id)
+    if digest.revision < 1:
+        issues.append(GateIssue("revision", "must be one or greater"))
+
+    for index, item in enumerate(digest.module_map, start=1):
+        prefix = f"module_map[{index}]"
+        _require_text(issues, f"{prefix}.module", item.module)
+        _require_text(issues, f"{prefix}.responsibility", item.responsibility)
+    for index, item in enumerate(digest.change_paths, start=1):
+        prefix = f"change_paths[{index}]"
+        _require_text(issues, f"{prefix}.scenario", item.scenario)
+        _require_text(issues, f"{prefix}.start_at", item.start_at)
+    for index, item in enumerate(digest.test_intent_map, start=1):
+        prefix = f"test_intent_map[{index}]"
+        _require_text(issues, f"{prefix}.intent", item.intent)
+        _require_items(issues, f"{prefix}.checks", item.checks)
+    return GateResult(tuple(issues))
+
+
 def validate_intent_model(model: IntentModel) -> GateResult:
     issues: list[GateIssue] = []
     _require_text(issues, "task_id", model.task_id)
@@ -293,11 +355,15 @@ def validate_plan_contract(contract: PlanContract) -> GateResult:
     if contract.design_intents and not contract.docs:
         issues.append(GateIssue("docs", "plans that change design intent must include docs, ADR, or RFC updates"))
 
-    if contract.maintenance_model is None:
-        issues.append(GateIssue("maintenance_model", "plan must explain how the result stays understandable and maintainable"))
-    else:
+    if contract.maintenance_model is not None:
         for issue in validate_maintenance_model(contract.maintenance_model).issues:
             issues.append(GateIssue(f"maintenance_model.{issue.field}", issue.message))
+
+    if contract.maintenance_digest is None:
+        issues.append(GateIssue("maintenance_digest", "plan must include a user-facing MaintenanceDigestCandidate"))
+    else:
+        for issue in validate_maintenance_digest(contract.maintenance_digest).issues:
+            issues.append(GateIssue(f"maintenance_digest.{issue.field}", issue.message))
 
     _require_text(issues, "rollback_plan", contract.rollback_plan)
 

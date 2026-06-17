@@ -56,7 +56,15 @@ def build_plan_task_draft_prompt(raw_request: str) -> str:
             "  - affected_files",
             "  - new_files",
             "  - design_intents",
-            "  - MaintenanceModel before implementation_slices:",
+            "  - MaintenanceDigestCandidate before implementation_slices:",
+            "    - mental_model",
+            "    - module_map: module, responsibility",
+            "    - change_paths: scenario, start_at, notes",
+            "    - extension_points",
+            "    - invariants",
+            "    - test_intent_map",
+            "    - handoff_notes",
+            "  - Optional MaintenanceModel for broad or architectural tasks:",
             "    - mental_model",
             "    - module_responsibilities: module, owns, does_not_own, depends_on",
             "    - change_scenarios: scenario, start_at, likely_files, notes",
@@ -77,13 +85,26 @@ def build_plan_task_draft_prompt(raw_request: str) -> str:
             "",
             "4. Plan gate",
             "- If you output PlanOptions, say PlanContract gate: not reached because IntentModel is blocked.",
-            "- Say gate: ok only if the plan has evidence, file scope, MaintenanceModel, reviewable slices, checks, "
+            "- Say gate: ok only if the plan has evidence, file scope, MaintenanceDigestCandidate, reviewable slices, checks, "
             "tests or a no-test rationale, docs for design-intent changes, rollback notes, and confirmation for high risk.",
             "- Otherwise say gate: blocked and list missing fields.",
             "",
-            "5. PlanArtifact candidate",
+            "5. MaintenanceDigest candidate",
+            "- Only if PlanContract gate is ok, output a compact JSON object named MaintenanceDigestCandidate.",
+            "- If you produced a full MaintenanceModel, compress it. Otherwise derive the digest directly from inspected project evidence.",
+            "- This is for the user, not for tool execution. It should help them understand, maintain, and extend the project.",
+            "- Include: mental_model, module_map, change_paths, extension_points, invariants, test_intent_map, handoff_notes.",
+            "- module_map items: module, responsibility.",
+            "- change_paths items: scenario, start_at, notes.",
+            "- test_intent_map items: intent, checks.",
+            "- DigestGate is ok only if mental_model is non-empty, module_map has at least one item, change_paths has at least two items, "
+            "extension_points has at least one item, invariants has at least one item, and handoff_notes has at least one item.",
+            "- If DigestGate is blocked, say PlanArtifactCandidate: not produced.",
+            "",
+            "6. PlanArtifact candidate",
             "- Only if PlanContract gate is ok, output a compact JSON object named PlanArtifactCandidate.",
             "- Include: goal, summary, planned_files, current_step.",
+            "- Embed the digest JSON as maintenance_digest when DigestGate is ok.",
             "- Also include lightweight execution-contract fields when available:",
             "  - non_goals",
             "  - constraints",
@@ -92,8 +113,21 @@ def build_plan_task_draft_prompt(raw_request: str) -> str:
             "  - verification",
             "- planned_files must be workspace-relative paths from affected_files and new_files.",
             "- If PlanContract gate is blocked, say PlanArtifactCandidate: not produced.",
+            "- Minimal valid shape:",
+            "```json",
+            (
+                '{"goal":"...","summary":"...","planned_files":["pyagent/example.py"],'
+                '"current_step":"...","maintenance_digest":{"mental_model":"...",'
+                '"module_map":[{"module":"pyagent/example.py","responsibility":"..."}],'
+                '"change_paths":[{"scenario":"...","start_at":"pyagent/example.py","notes":"..."},'
+                '{"scenario":"...","start_at":"tests/test_example.py","notes":"..."}],'
+                '"extension_points":["..."],"invariants":["..."],'
+                '"test_intent_map":[{"intent":"...","checks":["..."]}],'
+                '"handoff_notes":["..."]}}'
+            ),
+            "```",
             "",
-            "6. Human review questions",
+            "7. Human review questions",
             "- Ask only the questions whose answers would materially change the intent or plan.",
         ]
     )
@@ -137,7 +171,8 @@ def build_plan_review_transition_prompt(user_message: str) -> str:
             (
                 '{"action":"confirm_execution","artifact":{"goal":"","summary":"","planned_files":[],'
                 '"non_goals":[],"constraints":[],"slices":[],"current_slice_id":"","current_step":"",'
-                '"verification":[]}}'
+                '"verification":[],"maintenance_digest":{"mental_model":"","module_map":[],"change_paths":[],'
+                '"extension_points":[],"invariants":[],"test_intent_map":[],"handoff_notes":[]}}}'
             ),
             "```",
             "",

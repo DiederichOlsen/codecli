@@ -8,6 +8,7 @@ from typing import Any, Optional
 from .. import ui
 from ..messages import tool_message
 from ..permissions import PermissionManager
+from ..schema_validation import format_schema_issues, validate_json_schema
 from ..task_planning import (
     has_goal_anchor,
     planning_status_blocks_tool,
@@ -278,40 +279,8 @@ class ToolExecutor:
 
 
 def validate_args(schema: dict[str, Any], args: Any) -> str:
-    if not isinstance(args, dict):
-        return "arguments must be a JSON object"
-
-    for key in schema.get("required", []):
-        if key not in args:
-            return f"missing required field: {key}"
-
-    properties = schema.get("properties") or {}
-    for key, value in args.items():
-        prop = properties.get(key)
-        if not isinstance(prop, dict):
-            continue
-        expected = prop.get("type")
-        if expected and not _matches_type(value, expected):
-            return f"field {key} must be {expected}"
-    return ""
-
-
-def _matches_type(value: Any, expected: Any) -> bool:
-    if isinstance(expected, list):
-        return any(_matches_type(value, item) for item in expected)
-    if expected == "string":
-        return isinstance(value, str)
-    if expected == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
-    if expected == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
-    if expected == "boolean":
-        return isinstance(value, bool)
-    if expected == "array":
-        return isinstance(value, list)
-    if expected == "object":
-        return isinstance(value, dict)
-    return True
+    issues = validate_json_schema(schema, args)
+    return format_schema_issues(issues)
 
 
 def _indent_block(text: str, prefix: str = "  ") -> str:

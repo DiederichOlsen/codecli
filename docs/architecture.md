@@ -30,6 +30,22 @@ user input
 
 工具调用细节由 `ToolExecutor` 和 `ToolScheduler` 负责。
 
+## CLI Boundary
+
+`pyagent.cli` is intentionally thin: argument parsing, the interactive loop,
+status/help output, and direct `/tool` execution stay there. Command families
+with their own state transitions live in focused modules:
+
+- `pyagent.cli_plan_task`: `/plan-task` and natural-language confirmation flow.
+- `pyagent.cli_session`: `/session` commands.
+- `pyagent.plan_parsing`: `PlanArtifact` and `MaintenanceDigest` JSON parsing.
+- `pyagent.plan_export`: `/mental-model`, plan Markdown rendering, and
+  `PlanStore` persistence.
+- `pyagent.cli_common`: small shared CLI formatting helpers.
+
+This keeps user-facing control flow readable while preventing plan parsing,
+session switching, and export logic from accumulating inside one entry file.
+
 ## ToolExecutor
 
 `pyagent.tools.executor.ToolExecutor` 统一执行一条工具调用：
@@ -42,6 +58,13 @@ parse arguments
   -> run tool
   -> build tool_result
 ```
+
+Schema validation uses a shared JSON Schema subset in
+`pyagent/schema_validation.py`. It reports nested paths such as
+`$.maintenance_digest.change_paths[0].start_at`, supports required fields,
+arrays, enums, `minItems`, and unknown-field checks when a schema sets
+`additionalProperties: false`. The same validator is used for normal tool
+arguments and for structured planning artifacts.
 
 任何失败都必须变成 `tool_result` 回填给模型，包括：
 
@@ -62,6 +85,24 @@ parse arguments
 - `Edit`、`Write`、`Bash` 默认都应保持串行。
 
 这让读文件、搜索这类操作可以提速，同时避免写文件和命令执行互相踩状态。
+
+## Orientation Tools
+
+PyAgent includes read-only orientation tools so the model can build project
+context before editing:
+
+- `ProjectTree`: compact workspace tree, skipping noisy directories.
+- `GitStatus`: concise branch and dirty-state summary.
+- `GitDiff`: working-tree or staged diff, optionally scoped to one path.
+- `GitBlame`: line ownership/history for a workspace file.
+- `FileOutline`: compact imports/classes/functions for a file, with a small
+  text-heading fallback.
+
+Tools marked `read_only=True` by the registry are allowed in plan mode and may
+be concurrency-safe when they do not mutate runtime state. This is metadata
+driven rather than a growing name allowlist. These tools are not a sandbox
+replacement; they are narrow read-only wrappers intended to improve planning
+evidence and handoff quality.
 
 ## EditPolicy
 
